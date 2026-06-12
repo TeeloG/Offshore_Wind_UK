@@ -1,0 +1,17 @@
+#python bytecode and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+#virtual environments
+.venv/
+venv/
+env/
+
+#os cruft
+.DS_Store
+Thumbs.db
+
+#editor settings
+.idea/

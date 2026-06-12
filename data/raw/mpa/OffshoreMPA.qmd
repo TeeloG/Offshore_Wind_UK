@@ -1,0 +1,64 @@
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.34.10-Prizren">
+  <identifier>c20230705_OffshoreMPAs_WGS84</identifier>
+  <parentidentifier></parentidentifier>
+  <language>ENG</language>
+  <type>dataset</type>
+  <title>c20200930_OffshoreMPAs_WGS84</title>
+  <abstract>This layer contains site boundaries and attribute data on Offshore Marine Protected Areas (MPA) in UK waters. 
+This layer is projected in WGS 1984 Geographic Coordinate System. Please see the ‘read me’ in the UK Offshore MPAs spreadsheet in for an explanation of the attribute table columns, and for further background information. We strongly recommend referring to this information before filtering data in this layer.
+Note that SACs are listed in the Site Status column as either candidate SAC (cSAC) Site of Community Importance (SCI) or SAC depending on their stage in the designation process (http://data.jncc.gov.uk/data/5dc040a7-cf45-49d9-986c-f272a2ec9d91/Offshore-SAC-Designation-Process-web.pdf). MCZs in UK offshore waters currently comprise those designated by the Secretary of State (SoS) in England inshore, England offshore and Northern Ireland offshore waters ("MCZ - Secretary of State").
+Site areas are in hectares, originating from a range of sources and projections according to designation type. SAC and SPA site areas are the values on the official site Standard Data Forms (calculated on a site-by-site basis). Nautre Conservation MPA site areas are the values given in the NautreScot and JNCC Site Summary Documents at designation in July 2014. Areas for SoS Tranche One offshore MCZs (designated November 2013) are the values given in the JNCC Site Summary Documents at designation in November 2013. Areas for SoS Tranche Two MCZs (designated January 2016) were calculated on a site-by-site basis in WGS 84 UTM Zone 29N-31N projections. Areas of SoS Tranche Three MCZs (designated May 2019) were calculated by JNCC on a site-by-site basis in either Albers Equal Area Conic (50.2N and 61.2N standard parallels) for offshore sites and joint inshore/offshore sites advised on by JNCC, or British National Grid for joint inshore/offshore sites advised on by Natural England. The Area of the West of Scotland site was calculated in ETRS1989 Lambert Azimuthal Equal-Area (EPSG: 3035). The areas of HPMAs designated in June 2023 were Calculated by JNCC using ETRS1989 Lambert Azimuthal Equal-Area (EPSG: 3035).
+This version (20230705) includes the following updates:
+-Addition of two HPMAs Dolphin Head HPMA and North East of Farnes Deep HPMA. 
+Details of changes made in previous versions:
+Version 20201214 Addition of 3 new joint inshore/offshore SPAs - Seas off St Kilda SPA, Seas off Foula SPA, Outer Firth of Forth and St Andrews Bay Complex SPA.
+Version - 20200930: Addition of West of Scotland MPA site and feature information. Removal of Rosemary Bank Seamount Nature Conservation MPA which has been replaced by West of Scotland MPA. Addition of WDPA codes for the Tranche 3 MCZ sites designated in 2019. Update of Scottish agency from SNH to NatureScot. 
+Version-20190905:Change of status for Croker Carbonate Slabs from cSAC/SCI to fully designated SAC.
+Version-20190531:Addition of 16 offshore and joint inshore/offshore SoS Tranche ThreeMCZs: Cape Bank, East of Start Point, Holderness Offshore, Inner Bank, Kentish Knock East, Orford Inshore, South of the Isles of Scilly, South-West Approaches to Bristol Channel, Markham's Triangle, North-East of Haig Fras, Queenie Corner, South of Celtic Deep, South Rigg, South-West Deeps (East), West of Copeland, and West of Wight-Barfleur.
+Version-20190225: Change of status for 5 sites from cSAC/SCIs to fully designated SACs: Bristol Channel Approaches / Dynesfeydd Môr Hafren, North Anglesey Marine / Gogledd Môn Forol, North Channel, Southern North Sea and West Wales Marine / Gorllewin Cymru Forol.
+Version-20180927:Addition of Greater Wash SPA. Update to the site boundary and attribute information for Braemar Pockmarks and Scanner Pockmark SACs.
+Version-20180501: Update to the status of the following sites as cSACs/SCIs; Southern North Sea, Bristol Channel Approaches / Dynesfeydd Môr Hafren, West Wales Marine / Gorllewin Cymru Forol, North Anglesey Marine / Gogledd Môn Forol and North Channel.
+Version - 20171211: New addition of Irish Sea Front SPA. New inclusion of Liverpool Bay SPA following a boundary extension. Attribute data and/or boundary changes to Outer Thames Estuary SPA, Poole Harbour SPA, and Croker Carbonate Slabs cSAC/SCI.Update to the status ofthe following sites now designated as full SACs, North-West Rockall Bank SAC, Wyville-Thomson Ridge SAC, Pobie Bank Reef SAC, Solan Bank Reef SAC, East Rockall Bank SAC, Anton Dohrn Seamount SAC, Bassurelle Sandbank SAC, Haisborough, Hammond &amp; Winterton SAC, Inner Dowsing, Race Bank &amp; North Ridge SAC, North Norfolk Sandbanks &amp; Saturn Reef SAC, Dogger Bank SAC, Pisces Reef Complex SAC, and Wight-Barfleur Reef SAC
+Version-20170724: New inclusion of Skomer, Skokholm and the Seas off Pembrokeshire / Sgomer, Sgogwm a Moroedd Penfro SPA (formely known as Skokholm and Skomer SPA) following a boundary extension. 
+Version-20170222: Added 5 candidate SACs submitted to the EC for protection of harbour porpoise.Addition of Inner Hebrides and the Minches cSAC.
+Version-20160127:Update to the status of five offshore sites designated as full SACs. This version also follows the UK's submission of revised Natura2000 Standard Data Forms to the European Commission in Dec 15.
+Version-20160117:Addition of Tranche 2 Marine Conservation Zones.Addition of Outer Thames Estuary SPA and South Dorset MCZ joint inshore/offshore sites.
+Version-20150727:Haig Fras boundary change submitted to Europe - changed area, lat and long values.
+
+
+This UK Offshore Marine Protected Areas (MPA) layer contains the site boundaries and attribute information of offshore MPAs designated in UK waters (beyond 12 nautical miles). Last updated 5th July 2023. </abstract>
+  <keywords vocabulary="Search keys">
+    <keyword>UK</keyword>
+    <keyword>Marine Protected Area</keyword>
+    <keyword>Offshore</keyword>
+    <keyword>MPA</keyword>
+    <keyword>Nature Conservation MPA</keyword>
+    <keyword>SAC</keyword>
+    <keyword>MCZ</keyword>
+    <keyword>SPA</keyword>
+  </keywords>
+  <links/>
+  <dates/>
+  <fees></fees>
+  <constraints type="Limitations of use">Re-use of the data is subject to the terms of the Open Government Licence v3.0 including attribution of the relevent copyright holders. http://www.nationalarchives.gov.uk/doc/open-government-licence/version/ The site boundaries include sections of UK Exclusive Economic Zone © Crown copyright. The exact limits of the EEZ are set out in The Exclusive Economic Zone Order 2013. If you re-use this information you must acknowledge the source in your product or application by including or linking to the following attribution statement: Contains Joint Nature Conservation Committee data © copyright and database right 2020. Contains Natural England data © copyright and database right 2020. Contains NautreScot data © copyright and database right 2020. Contains Natural Resource Wales data © copyright and database right 2020. Contains Northern Ireland Environment Agency data © copyright and database right 2020. Contains Scottish Government (Marine Scotland) data © copyright and database right [2020].Contains UK Hydrographic Office data © copyright and database right 2020. Contains Ordnance Survey data © copyright and database right 2020.</constraints>
+  <rights>Re-use of the data is subject to the terms of the Open Government Licence v3.0 including attribution of the relevent copyright holders. http://www.nationalarchives.gov.uk/doc/open-government-licence/version/ The site boundaries include sections of UK Exclusive Economic Zone © Crown copyright. The exact limits of the EEZ are set out in The Exclusive Economic Zone Order 2013. If you re-use this information you must acknowledge the source in your product or application by including or linking to the following attribution statement: Contains Joint Nature Conservation Committee data © copyright and database right 2020. Contains Natural England data © copyright and database right 2020. Contains NatureScot data © copyright and database right 2020. Contains Natural Resource Wales data © copyright and database right 2020. Contains Northern Ireland Environment Agency data © copyright and database right 2020. Contains Scottish Government (Marine Scotland) data © copyright and database right [2020].&#xd;
+Contains UK Hydrographic Office data © copyright and database right 2020. Contains Ordnance Survey data © copyright and database right 2020.</rights>
+  <encoding></encoding>
+  <crs>
+    <spatialrefsys nativeFormat="Wkt">
+      <wkt>GEOGCRS["WGS 84",ENSEMBLE["World Geodetic System 1984 ensemble",MEMBER["World Geodetic System 1984 (Transit)"],MEMBER["World Geodetic System 1984 (G730)"],MEMBER["World Geodetic System 1984 (G873)"],MEMBER["World Geodetic System 1984 (G1150)"],MEMBER["World Geodetic System 1984 (G1674)"],MEMBER["World Geodetic System 1984 (G1762)"],MEMBER["World Geodetic System 1984 (G2139)"],ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ENSEMBLEACCURACY[2.0]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["geodetic latitude (Lat)",north,ORDER[1],ANGLEUNIT["degree",0.0174532925199433]],AXIS["geodetic longitude (Lon)",east,ORDER[2],ANGLEUNIT["degree",0.0174532925199433]],USAGE[SCOPE["Horizontal component of 3D system."],AREA["World."],BBOX[-90,-180,90,180]],ID["EPSG",4326]]</wkt>
+      <proj4>+proj=longlat +datum=WGS84 +no_defs</proj4>
+      <srsid>3452</srsid>
+      <srid>4326</srid>
+      <authid>EPSG:4326</authid>
+      <description>WGS 84</description>
+      <projectionacronym>longlat</projectionacronym>
+      <ellipsoidacronym>EPSG:7030</ellipsoidacronym>
+      <geographicflag>true</geographicflag>
+    </spatialrefsys>
+  </crs>
+  <extent>
+    <spatial crs="EPSG:4326" minx="-19.25" minz="0" dimensions="2" maxz="0" maxy="63.88706700000000183" miny="48.16666699999999679" maxx="3.24986100000000011"/>
+  </extent>
+</qgis>
