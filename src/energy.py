@@ -32,6 +32,35 @@ def estimate_cf_from_wind_speed(mean_wind_ms: float,
         return cf_at_15 + (mean_wind_ms - 15.0) * 0.008
 
 
+def capacity_factor_from_wind(ws, power_curve: dict = None):
+    """
+    convert hub-height wind speed (m/s) to capacity factor (0-1) via a turbine
+    power curve.
+
+    used by the era5-native path (bug ledger #2) so capacity factors come from
+    the actual 15 mw power curve rather than the renewables.ninja 8 mw model.
+    the curve is a list of (wind speed, cf) points, linearly interpolated; cf is
+    forced to 0 at and above the cut-out speed.
+
+    args:
+        ws:          scalar or array of hub-height wind speeds (m/s).
+        power_curve: dict with 'curve' points and 'cut_out_ms'. defaults to
+                     config.POWER_CURVE.
+
+    returns:
+        numpy array of capacity factors (0-1), same shape as ws.
+    """
+    from config import POWER_CURVE
+    c = power_curve or POWER_CURVE
+    pts = np.asarray(c["curve"], dtype=float)
+    xs, ys = pts[:, 0], pts[:, 1]
+
+    ws = np.asarray(ws, dtype=float)
+    cf = np.interp(ws, xs, ys)
+    cf = np.where(ws >= c["cut_out_ms"], 0.0, cf)
+    return np.clip(cf, 0.0, 1.0)
+
+
 def apply_losses_to_cf(mean_cf: float,
                        array_loss_pct: float = 11.27,
                        electrical_loss_pct: float = 8.90,
@@ -99,12 +128,18 @@ def compute_aep(capacity_factor_series: pd.Series,
 def compute_aep_for_all_sites(candidate_sites: pd.DataFrame,
                                ninja_token: str = "",
                                year: int = 2019,
-                               v2_farms_df=None) -> pd.DataFrame:
+                               v2_farms_df=None,
+                               return_series: bool = False,
+                               wind_provider=None):
     """
     fetch capacity factor time series and compute aep for every candidate site.
 
     iterates over rows in candidate_sites (must have 'lat', 'lon' columns).
     caches api responses locally to avoid rate-limiting (see data_loader.py).
+
+    the hourly series is fetched once per site here and can be returned for reuse
+    (e.g. dunkelflaute detection) so downstream code does not re-fetch it
+    (bug ledger #3, which previously fetched each series three times).
 
     year 2019 is used as it's the most recent complete era5 year and avoids
     covid-related anomalies in 2020.
@@ -113,25 +148,39 @@ def compute_aep_for_all_sites(candidate_sites: pd.DataFrame,
         candidate_sites: dataframe with 'lat' and 'lon' columns.
         ninja_token:     renewables.ninja api token (leave blank for synthetic data).
         year:            calendar year to fetch hourly cf data for.
+        return_series:   if true, also return a dict mapping site index to its
+                         hourly cf series so callers can reuse it.
+        wind_provider:   optional WindResource. when given, hourly cf comes from
+                         provider.get_hourly_cf (e.g. era5-native cf); otherwise
+                         the renewables.ninja cache/synthetic path is used.
 
     returns:
         candidate_sites with mean_cf, aep_mwh, aep_adjusted_mwh,
-        capacity_factor_p50, hours_above_50pct columns appended.
+        capacity_factor_p50, hours_above_50pct columns appended. if return_series
+        is true, returns (dataframe, {index: cf_series}) instead.
     """
     #deferred imports to avoid circular dependency with config.py
     from src.data_loader import fetch_ninja_capacity_factors
     from config import TURBINE
 
     results = []
+    series_map = {}
 
     for idx, site in candidate_sites.iterrows():
-        cf_series = fetch_ninja_capacity_factors(
-            lat=site["lat"],
-            lon=site["lon"],
-            token=ninja_token,
-            year=year,
-            v2_farms_df=v2_farms_df
-        )
+        if wind_provider is not None:
+            #era5-native (or other provider) capacity factors
+            cf_series = wind_provider.get_hourly_cf(
+                lat=site["lat"], lon=site["lon"], year=year
+            )
+        else:
+            cf_series = fetch_ninja_capacity_factors(
+                lat=site["lat"],
+                lon=site["lon"],
+                token=ninja_token,
+                year=year,
+                v2_farms_df=v2_farms_df
+            )
+        series_map[idx] = cf_series
 
         aep = compute_aep(
             cf_series,
@@ -145,7 +194,11 @@ def compute_aep_for_all_sites(candidate_sites: pd.DataFrame,
               f"AEP={aep['aep_adjusted_mwh']:,.0f} MWh/turbine/yr")
 
     aep_df = pd.DataFrame(results, index=candidate_sites.index)
-    return pd.concat([candidate_sites, aep_df], axis=1)
+    out = pd.concat([candidate_sites, aep_df], axis=1)
+
+    if return_series:
+        return out, series_map
+    return out
 
 
 def flag_dunkelflaute(capacity_factor_series: pd.Series,

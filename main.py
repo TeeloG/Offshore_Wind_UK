@@ -24,7 +24,7 @@ import pandas as pd
 #add the project root so imports from config.py and src/ work when running main.py directly.
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import EEZ_SHAPEFILE, NINJA_API, TURBINE
+from config import EEZ_SHAPEFILE, NINJA_API, TURBINE, ERA5
 
 #data loading
 from src.data_loader import (
@@ -32,8 +32,10 @@ from src.data_loader import (
     load_era5_wind,
     add_gebco_depth,
     add_port_distances,
+    add_shore_distances,
     load_marine_protected_areas,
     SyntheticWind,
+    make_wind_provider,
 )
 
 #spatial analysis
@@ -103,6 +105,8 @@ def _resolve_paths() -> dict:
                    "BGS_250k_SeaBedSediments_WGS84_v3.shp"),
         #real renewables.ninja cfs for 44 operational uk farms; replaces the synthetic fallback.
         "v2": str(_PROJECT_ROOT / "data" / "raw" / "v2" / "Offshore wind farms.xlsx"),
+        #era5 100 m reanalysis; when present it drives the wind field and cf.
+        "era5": str(_PROJECT_ROOT / ERA5["nc_path"]) if ERA5.get("nc_path") else None,
     }
 
 
@@ -143,6 +147,10 @@ def load_data(paths: dict, wind_provider) -> tuple:
           f"max {wind_grid['mean_wind_ms'].max():.1f} m/s")
 
     wind_grid = add_port_distances(wind_grid)
+
+    #export-cable length proxy (distance to nearest coast), separate from the
+    #o&m port distance above, for the transmission capex term (bug ledger #8).
+    wind_grid = add_shore_distances(wind_grid, paths["gebco"])
 
     print(f"  Wind grid after enrichment: {len(wind_grid)} points, "
           f"columns: {list(wind_grid.columns)}\n")
@@ -209,10 +217,15 @@ def run_spatial_analysis(wind_grid: pd.DataFrame, mpa_gdf, seabed_gdf) -> tuple:
 #phase 3 - energy yield estimation
 #=============================================================================
 
-def run_energy_analysis(candidate_sites: pd.DataFrame, v2_farms, v2_losses: dict) -> pd.DataFrame:
+def run_energy_analysis(candidate_sites: pd.DataFrame, v2_farms, v2_losses: dict,
+                        wind_provider=None) -> pd.DataFrame:
     """
     fetch capacity-factor series and compute aep for each candidate site, apply
     v2-derived loss factors, and flag dunkelflaute events.
+
+    when wind_provider is an ERA5Wind, the hourly cf comes from era5 100 m wind
+    via the configured power curve; otherwise the renewables.ninja cache/synthetic
+    path is used.
 
     returns:
         sites_with_aep dataframe with mean_cf, aep_*, calculated_cf columns.
@@ -222,11 +235,15 @@ def run_energy_analysis(candidate_sites: pd.DataFrame, v2_farms, v2_losses: dict
     print("="*60)
 
     #year 2019 avoids covid distortions and matches the available era5/api dataset.
-    sites_with_aep = compute_aep_for_all_sites(
+    #the hourly cf series is fetched once here and reused below for dunkelflaute
+    #detection, instead of being re-fetched per site (bug ledger #3).
+    sites_with_aep, cf_series_map = compute_aep_for_all_sites(
         candidate_sites,
         ninja_token=NINJA_API["token"],
         year=NINJA_API["year"],
         v2_farms_df=v2_farms,
+        return_series=True,
+        wind_provider=wind_provider,
     )
     print(f"  AEP computed for {len(sites_with_aep)} sites.\n")
 
@@ -242,31 +259,16 @@ def run_energy_analysis(candidate_sites: pd.DataFrame, v2_farms, v2_losses: dict
         )
     )
 
-    #dunkelflaute detection on each candidate site
+    #dunkelflaute detection on each candidate site, reusing the series already
+    #fetched above. a single pass replaces the two identical re-fetch loops.
     from src.energy import flag_dunkelflaute
-    from src.data_loader import fetch_ninja_capacity_factors
 
     for idx, site in sites_with_aep.iterrows():
-        cf_series = fetch_ninja_capacity_factors(
-            lat=site["lat"],
-            lon=site["lon"],
-            token=NINJA_API["token"],
-            year=NINJA_API["year"],
-        )
+        cf_series = cf_series_map[idx]
         events = flag_dunkelflaute(cf_series)
         print(f"\nSite {idx} ({site['lat']:.1f}, {site['lon']:.1f}): "
               f"{len(events)} Dunkelflaute events")
-
-    for idx, site in sites_with_aep.iterrows():
-        cf_series = fetch_ninja_capacity_factors(
-            lat=site["lat"],
-            lon=site["lon"],
-            token=NINJA_API["token"],
-            year=NINJA_API["year"],
-        )
-        events = flag_dunkelflaute(cf_series)
         if len(events) > 0:
-            print(f"\nSite {idx} ({site['lat']:.1f}, {site['lon']:.1f}):")
             print(events.to_string(index=False))
 
     return sites_with_aep
@@ -457,9 +459,14 @@ def main(open_browser: bool = None) -> None:
     """
     paths = _resolve_paths()
 
-    #default wind source is the synthetic field plus ninja cache (offline/tokenless).
-    #swap for ERA5Wind here once real reanalysis is available (phase 4).
-    wind_provider = SyntheticWind(eez_shapefile=paths["eez"])
+    #wind source: real era5 when its .nc is present, else synthetic field +
+    #ninja cache (offline/tokenless). the same provider supplies both the
+    #suitability wind field and the hourly capacity factors.
+    wind_provider = make_wind_provider(
+        eez_shapefile=paths["eez"],
+        era5_nc_path=paths["era5"],
+        ninja_token=NINJA_API["token"],
+    )
 
     wind_grid, seabed_gdf, mpa_gdf, v2_farms, v2_losses = load_data(paths, wind_provider)
 
@@ -467,11 +474,18 @@ def main(open_browser: bool = None) -> None:
         wind_grid, mpa_gdf, seabed_gdf
     )
 
-    sites_with_aep = run_energy_analysis(candidate_sites, v2_farms, v2_losses)
+    sites_with_aep = run_energy_analysis(candidate_sites, v2_farms, v2_losses, wind_provider)
 
     sites_final, sites_final_original = run_economics(
         sites_with_aep, grid, site_combinations, v2_losses
     )
+
+    #phase 5 validation: needs real era5 hourly wind (skipped under synthetic).
+    if v2_farms is not None and hasattr(wind_provider, "get_hourly_wind"):
+        from src.validation import run_validation
+        run_validation(wind_provider, v2_farms, v2_losses)
+    else:
+        print("[Validation] Skipped (requires ERA5 wind provider and V2 farm data).")
 
     map1, map2 = run_visualisation(
         wind_grid, grid, sites_final, sites_final_original,

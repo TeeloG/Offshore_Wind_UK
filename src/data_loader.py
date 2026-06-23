@@ -72,6 +72,146 @@ class SyntheticWind:
         )
 
 
+class ERA5Wind:
+    """
+    wind provider backed by era5 100 m reanalysis (phase 4).
+
+    get_grid samples the annual-mean ws100 field onto the same lon/lat grid the
+    synthetic provider uses, so site selection is driven by real wind. get_hourly_cf
+    derives a real capacity-factor series from hourly ws100 via the configured
+    power curve, removing the per-site renewables.ninja cache dependence and the
+    8 mw / 15 mw turbine mismatch (bug ledger #2).
+
+    activates only when the .nc file exists; make_wind_provider falls back to
+    SyntheticWind otherwise so the pipeline still runs with no download.
+
+    args:
+        nc_path:       path to the era5 100 m u/v netcdf.
+        eez_shapefile: optional uk eez .shp for grid clipping (matches synthetic).
+        power_curve:   optional power-curve dict (defaults to config.POWER_CURVE).
+    """
+
+    def __init__(self, nc_path: str, eez_shapefile: str = None,
+                 power_curve: dict = None):
+        self.nc_path = nc_path
+        self.eez_shapefile = eez_shapefile
+        self.power_curve = power_curve
+        self._ds = None
+
+    def _open(self):
+        if self._ds is None:
+            import xarray as xr
+            self._ds = xr.open_dataset(self.nc_path)
+        return self._ds
+
+    @staticmethod
+    def _names(ds):
+        lon = "longitude" if "longitude" in ds.coords else "lon"
+        lat = "latitude" if "latitude" in ds.coords else "lat"
+        t = ("valid_time" if "valid_time" in ds.coords
+             else ("time" if "time" in ds.coords else None))
+        return lon, lat, t
+
+    def get_grid(self, resolution: float = 0.5) -> pd.DataFrame:
+        import xarray as xr
+        from config import UK_BBOX
+
+        ds = self._open()
+        lon_name, lat_name, _ = self._names(ds)
+
+        #same lon/lat grid the synthetic provider builds, so depth/port/seabed
+        #enrichment and exclusions are identical and only the wind values change.
+        lons = np.arange(UK_BBOX["min_lon"], UK_BBOX["max_lon"], resolution)
+        lats = np.arange(UK_BBOX["min_lat"], UK_BBOX["max_lat"], resolution)
+        lon_grid, lat_grid = np.meshgrid(lons, lats)
+        flat_lon = lon_grid.ravel()
+        flat_lat = lat_grid.ravel()
+
+        #vectorised nearest-neighbour sample of the era5 cells under each point,
+        #then annual mean of ws100 = sqrt(u^2 + v^2).
+        xlon = xr.DataArray(flat_lon, dims="pts")
+        xlat = xr.DataArray(flat_lat, dims="pts")
+        u = ds["u100"].sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
+        v = ds["v100"].sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
+        ws = np.sqrt(u**2 + v**2)
+        mean_ws = ws.mean(axis=0)
+
+        df = pd.DataFrame({
+            "lon": flat_lon,
+            "lat": flat_lat,
+            "mean_wind_ms":       np.round(mean_ws, 2),
+            "wind_power_density": np.round(0.5 * 1.225 * mean_ws**3, 1),
+        })
+        print(f"[ERA5] Sampled ERA5 100 m annual-mean wind to {len(df)} grid points. "
+              f"Mean {mean_ws.mean():.1f} m/s, range {mean_ws.min():.1f}-{mean_ws.max():.1f} m/s.")
+
+        df = self._clip_to_eez(df)
+        return df
+
+    def _clip_to_eez(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not self.eez_shapefile:
+            return df
+        try:
+            import geopandas as gpd
+            from shapely.geometry import Point
+
+            eez = gpd.read_file(self.eez_shapefile).to_crs(epsg=4326)
+            gdf = gpd.GeoDataFrame(
+                df,
+                geometry=[Point(lon, lat) for lon, lat in zip(df.lon, df.lat)],
+                crs="EPSG:4326",
+            )
+            df = (gpd.sjoin(gdf, eez, how="inner", predicate="within")
+                     .drop(columns=["geometry", "index_right"])
+                     .reset_index(drop=True))
+            print(f"[ERA5] {len(df)} grid points remaining after EEZ mask.")
+        except Exception as e:
+            print(f"[ERA5] WARNING: Could not apply EEZ mask: {e}. Using full bounding box.")
+        return df
+
+    def get_hourly_wind(self, lat: float, lon: float) -> pd.Series:
+        """hourly hub-height wind speed (m/s) at the nearest era5 cell to a point."""
+        ds = self._open()
+        lon_name, lat_name, t_name = self._names(ds)
+
+        u = ds["u100"].sel({lon_name: lon, lat_name: lat}, method="nearest").values
+        v = ds["v100"].sel({lon_name: lon, lat_name: lat}, method="nearest").values
+        ws = np.sqrt(u**2 + v**2)
+
+        idx = (pd.to_datetime(ds[t_name].values) if t_name
+               else pd.RangeIndex(len(ws)))
+        return pd.Series(ws, index=idx, name="ws100")
+
+    def get_hourly_cf(self, lat: float, lon: float, year: int = 2019) -> pd.Series:
+        from src.energy import capacity_factor_from_wind
+
+        ws = self.get_hourly_wind(lat, lon)
+        cf = capacity_factor_from_wind(ws.values, self.power_curve)
+        return pd.Series(cf, index=ws.index, name="electricity")
+
+
+def make_wind_provider(eez_shapefile: str = None,
+                       era5_nc_path: str = None,
+                       ninja_token: str = "",
+                       v2_farms_df=None):
+    """
+    return an ERA5Wind provider when its .nc file exists, else SyntheticWind.
+
+    this is the single seam that decides the wind source. real era5 is used when
+    present; otherwise the pipeline degrades gracefully to synthetic so it still
+    runs with no download and no api token.
+    """
+    if era5_nc_path and os.path.exists(era5_nc_path):
+        print(f"[ERA5] Found reanalysis file, using ERA5 wind provider: {era5_nc_path}")
+        return ERA5Wind(era5_nc_path, eez_shapefile=eez_shapefile)
+
+    print("[ERA5] No reanalysis file found, falling back to SyntheticWind "
+          "(synthetic field + ninja cache).")
+    return SyntheticWind(eez_shapefile=eez_shapefile,
+                         ninja_token=ninja_token,
+                         v2_farms_df=v2_farms_df)
+
+
 #era5 wind reanalysis
 
 def load_era5_wind(filepath: str) -> "xr.Dataset":
@@ -195,18 +335,15 @@ def add_gebco_depth(grid_df: pd.DataFrame,
         lat_dim  = "lat"  if "lat"  in ds.coords else "latitude"
 
         df = grid_df.copy()
-        depths = []
 
-        for _, row in df.iterrows():
-            elev = float(
-                ds[elev_var].sel(
-                    {lon_dim: row["lon"], lat_dim: row["lat"]},
-                    method="nearest"  #nearest-neighbour lookup
-                )
-            )
-            depths.append(abs(elev) if elev < 0 else 0.0)
-
-        df["depth_m"] = depths
+        #vectorised nearest-neighbour lookup (bug ledger #4): a single xr.sel with
+        #array indexers replaces the per-row python loop. identical result, ~20x
+        #faster, and scales to a national grid. negative elevation is ocean, so
+        #depth is its magnitude; land/zero cells get depth 0.
+        lons = xr.DataArray(df["lon"].values, dims="pts")
+        lats = xr.DataArray(df["lat"].values, dims="pts")
+        elev = ds[elev_var].sel({lon_dim: lons, lat_dim: lats}, method="nearest").values
+        df["depth_m"] = np.where(elev < 0, -elev, 0.0).astype(float)
 
         n_ocean = (df["depth_m"] > 0).sum()
         print(f"[GEBCO] Depth data added. {n_ocean}/{len(df)} points have ocean depth > 0 m. "
@@ -311,6 +448,88 @@ def add_port_distances(grid_df: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         print(f"[Ports] WARNING: Could not compute port distances: {e}. "
               "Suitability scoring will use placeholder 0.5 for distance_to_port.")
+        return grid_df
+
+
+#distance to shore (export-cable length proxy)
+
+def add_shore_distances(grid_df: pd.DataFrame,
+                        gebco_nc_path: str,
+                        coarsen_step: int = 10) -> pd.DataFrame:
+    """
+    add a 'dist_to_shore_km' column: straight-line distance from each grid point
+    to the nearest coastline.
+
+    this is a distinct quantity from dist_to_port_km (bug ledger #8). the export
+    cable runs to the nearest onshore grid-connection point, approximated here by
+    the nearest coast, whereas dist_to_port_km measures o&m / installation
+    transit to a maintenance port. the economics module uses this value for the
+    transmission (export-cable) capex term and dist_to_port_km for installation.
+
+    the coastline is derived from the gebco land/sea boundary (elevation >= 0),
+    coarsened by coarsen_step for tractability. the nearest land cell is found
+    with a cos-latitude projected kd-tree, then refined with haversine.
+
+    args:
+        grid_df:       dataframe with 'lat' and 'lon' columns.
+        gebco_nc_path: path to gebco netcdf (same file used for depth).
+        coarsen_step:  subsampling stride on the gebco grid for the coastline.
+
+    returns:
+        grid_df with 'dist_to_shore_km' added. on any failure the column is left
+        off and the economics module falls back to dist_to_port_km.
+    """
+    try:
+        import xarray as xr
+        from scipy.spatial import cKDTree
+
+        ds = xr.open_dataset(gebco_nc_path)
+        elev_var = "elevation" if "elevation" in ds else list(ds.data_vars)[0]
+        lon_dim  = "lon" if "lon" in ds.coords else "longitude"
+        lat_dim  = "lat" if "lat" in ds.coords else "latitude"
+
+        #coarsen the bathymetry so the land-cell tree stays small
+        sub  = ds[elev_var][::coarsen_step, ::coarsen_step]
+        lons = sub[lon_dim].values
+        lats = sub[lat_dim].values
+        elev = sub.values
+
+        lon_grid, lat_grid = np.meshgrid(lons, lats)
+        land = elev >= 0
+        land_lon = lon_grid[land]
+        land_lat = lat_grid[land]
+        if land_lon.size == 0:
+            raise ValueError("no land cells found in GEBCO subset")
+
+        #project lon/lat onto a plane scaled by cos(latitude) so a euclidean
+        #nearest neighbour is a good proxy for the great-circle nearest land.
+        lat0 = np.radians(float(np.mean(grid_df["lat"].values)))
+        coslat = np.cos(lat0)
+        tree = cKDTree(np.column_stack([land_lon * coslat, land_lat]))
+
+        g_lon = grid_df["lon"].values
+        g_lat = grid_df["lat"].values
+        _, idx = tree.query(np.column_stack([g_lon * coslat, g_lat]))
+
+        #refine the matched nearest land cell with an exact haversine distance
+        R = 6371.0
+        p1 = np.radians(g_lat)
+        p2 = np.radians(land_lat[idx])
+        dlat = np.radians(land_lat[idx] - g_lat)
+        dlon = np.radians(land_lon[idx] - g_lon)
+        a = np.sin(dlat / 2)**2 + np.cos(p1) * np.cos(p2) * np.sin(dlon / 2)**2
+        dshore = R * 2 * np.arcsin(np.sqrt(a))
+
+        df = grid_df.copy()
+        df["dist_to_shore_km"] = np.round(dshore, 1)
+        print(f"[Shore] Distance-to-shore added from GEBCO coastline "
+              f"(coarsen {coarsen_step}). Range: {dshore.min():.0f}-{dshore.max():.0f} km. "
+              f"Mean: {dshore.mean():.0f} km.")
+        return df
+
+    except Exception as e:
+        print(f"[Shore] WARNING: Could not compute distance to shore: {e}. "
+              "Export-cable length will fall back to dist_to_port_km.")
         return grid_df
 
 
@@ -512,6 +731,13 @@ def fetch_ninja_capacity_factors(lat: float, lon: float, token: str,
     """
     import requests
     from config import NINJA_API
+
+    #treat an absent or placeholder token as "no token" so an uncached point
+    #falls back to synthetic cf rather than attempting a doomed live api call.
+    #the cache check below runs first, so cached real series are unaffected.
+    token = (token or "").strip()
+    if token == "YOUR_TOKEN_HERE":
+        token = ""
 
     cache_file = f"outputs/data/ninja_{lat}_{lon}_{year}.csv"
 

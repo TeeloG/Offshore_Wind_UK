@@ -6,6 +6,23 @@ import numpy as np
 import pandas as pd
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    great-circle distance in km between two lon/lat points.
+
+    used for the isotropic minimum-separation test in site selection, so that
+    the gap between chosen sites is a true distance rather than a degree box
+    that shrinks east-west at high latitude. mirrors the haversine already used
+    for port distances in data_loader.py.
+    """
+    R = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2)**2 + np.cos(p1) * np.cos(p2) * np.sin(dlon / 2)**2
+    return float(R * 2 * np.arcsin(np.sqrt(a)))
+
+
 #hard constraint mask
 
 def apply_hard_exclusions(grid_df: pd.DataFrame,
@@ -125,7 +142,7 @@ def score_soft_constraints(grid_df: pd.DataFrame,
         grid_df with score_wind, score_depth, score_port, score_seabed,
         and suitability_score columns added.
     """
-    from config import SOFT_WEIGHTS, DEPTH
+    from config import SOFT_WEIGHTS, DEPTH, SCORE_ANCHORS as A
 
     df = grid_df.copy()
 
@@ -163,8 +180,11 @@ def score_soft_constraints(grid_df: pd.DataFrame,
     #wind resource score
     if "mean_wind_ms" in candidates.columns:
         ws = candidates["mean_wind_ms"]
-        #min-max normalise; 1e-9 prevents division by zero if all speeds identical
-        candidates["score_wind"] = (ws - ws.min()) / (ws.max() - ws.min() + 1e-9)
+        #fixed physical band rather than sample min-max, so a site's wind score
+        #does not drift when the grid or candidate set changes (bug ledger #6).
+        candidates["score_wind"] = np.clip(
+            (ws - A["wind_floor_ms"]) / (A["wind_ceil_ms"] - A["wind_floor_ms"]), 0, 1
+        )
     else:
         candidates["score_wind"] = 0.5
 
@@ -187,8 +207,9 @@ def score_soft_constraints(grid_df: pd.DataFrame,
     #distance to port score
     if "dist_to_port_km" in candidates.columns:
         d = candidates["dist_to_port_km"]
-        #invert-normalise: closest port = 1.0, furthest = 0.0
-        candidates["score_port"] = np.clip(1 - d / d.max(), 0, 1)
+        #fixed physical band rather than sample max, so 0 km scores 1.0 and the
+        #score is anchored at port_max_km regardless of the grid (bug ledger #6).
+        candidates["score_port"] = np.clip(1 - d / A["port_max_km"], 0, 1)
     else:
         candidates["score_port"] = 0.5
 
@@ -260,17 +281,25 @@ def score_soft_constraints(grid_df: pd.DataFrame,
 
 def select_candidate_sites(scored_df: pd.DataFrame,
                             top_n: int = 20,
-                            min_separation_deg: float = 1.0,
+                            min_separation_km: float = None,
                             exclude_mpa: bool = True) -> pd.DataFrame:
     """
     select the top-n candidate sites by suitability score, enforcing a minimum
     spatial separation to avoid clustering.
+
+    separation is a great-circle distance in km (config SITE_SELECTION
+    min_separation_km), replacing the old degree box which was anisotropic at
+    high latitude.
 
     if exclude_mpa is false, points inside mpas but not otherwise excluded
     are eligible for selection.
 
     returns a dataframe of candidate sites for energy and economic analysis.
     """
+    from config import SITE_SELECTION
+    if min_separation_km is None:
+        min_separation_km = SITE_SELECTION["min_separation_km"]
+
     mask = (~scored_df["hard_excluded"]
             if exclude_mpa
             else ~scored_df["hard_excluded_nonmpa"])
@@ -282,8 +311,7 @@ def select_candidate_sites(scored_df: pd.DataFrame,
         .reset_index(drop=True)
     )
 
-    #greedy selection with minimum spatial separation.
-    #1.0° buffer keeps sites roughly 65-111 km apart without full geodesic overhead.
+    #greedy selection with a minimum great-circle separation between picks.
     selected = []
 
     for _, row in candidates.iterrows():
@@ -291,8 +319,7 @@ def select_candidate_sites(scored_df: pd.DataFrame,
             break
 
         too_close = any(
-            abs(row["lat"] - s["lat"]) < min_separation_deg and
-            abs(row["lon"] - s["lon"]) < min_separation_deg
+            _haversine_km(row["lat"], row["lon"], s["lat"], s["lon"]) < min_separation_km
             for s in selected
         )
 
@@ -311,7 +338,7 @@ def select_candidate_sites(scored_df: pd.DataFrame,
 def recompute_candidate_sites(scored_grid: pd.DataFrame,
                                active_params: list,
                                top_n: int = 15,
-                               min_separation_deg: float = 1.0,
+                               min_separation_km: float = None,
                                exclude_mpa: bool = True) -> pd.DataFrame:
     """
     recompute composite suitability scores using only the selected parameters,
@@ -330,14 +357,16 @@ def recompute_candidate_sites(scored_grid: pd.DataFrame,
                             "wind_resource", "water_depth", "distance_to_port",
                             "seabed_type". at least one must be provided.
         top_n:              number of candidate sites to return (default 15).
-        min_separation_deg: minimum spatial separation in degrees.
+        min_separation_km:  minimum great-circle separation in km between picks.
         exclude_mpa:        if false, mpa sites not otherwise excluded are eligible.
 
     returns:
         dataframe of top-n candidate sites with 'suitability_score' column
         reflecting the toggled weights.
     """
-    from config import SOFT_WEIGHTS
+    from config import SOFT_WEIGHTS, SITE_SELECTION
+    if min_separation_km is None:
+        min_separation_km = SITE_SELECTION["min_separation_km"]
 
     PARAM_TO_COL = {
         "wind_resource":    "score_wind",
@@ -382,8 +411,7 @@ def recompute_candidate_sites(scored_grid: pd.DataFrame,
         if len(selected) >= top_n:
             break
         too_close = any(
-            abs(row["lat"] - s["lat"]) < min_separation_deg and
-            abs(row["lon"] - s["lon"]) < min_separation_deg
+            _haversine_km(row["lat"], row["lon"], s["lat"], s["lon"]) < min_separation_km
             for s in selected
         )
         if not too_close:
@@ -398,7 +426,7 @@ def recompute_candidate_sites(scored_grid: pd.DataFrame,
 
 def precompute_all_combinations(scored_grid: pd.DataFrame,
                                  top_n: int = 15,
-                                 min_separation_deg: float = 1.0) -> dict:
+                                 min_separation_km: float = None) -> dict:
     """
     pre-compute top candidate sites for every valid parameter combination.
 
@@ -409,7 +437,7 @@ def precompute_all_combinations(scored_grid: pd.DataFrame,
     args:
         scored_grid:        full scored grid from score_soft_constraints().
         top_n:              number of sites per combination (default 15).
-        min_separation_deg: spatial separation threshold.
+        min_separation_km:  great-circle separation threshold in km.
 
     returns:
         dict with 'mpa_excluded' and 'mpa_allowed' branches, each mapping
@@ -436,7 +464,7 @@ def precompute_all_combinations(scored_grid: pd.DataFrame,
                     sites_df = recompute_candidate_sites(
                         scored_grid, combo,
                         top_n=top_n,
-                        min_separation_deg=min_separation_deg,
+                        min_separation_km=min_separation_km,
                         exclude_mpa=mpa_excluded,
                     )
                     #store only the fields the map js needs

@@ -5,11 +5,23 @@ import numpy as np
 import pandas as pd
 
 
-def estimate_capex(depth_m: float, rated_power_mw: float, distance_km: float = 0.0) -> float:
+def estimate_capex(depth_m: float, rated_power_mw: float,
+                   dist_to_port_km: float = 0.0,
+                   dist_to_grid_km: float = None) -> float:
     """
     estimate capex (£) for a single turbine using industry-standard component
     breakdowns, stepped foundation thresholds, and hvac/hvdc transmission logic.
+
+    two distances enter the model (bug ledger #8):
+        dist_to_port_km: o&m / installation vessel transit to a maintenance port.
+        dist_to_grid_km: export-cable length to the onshore grid-connection
+                         point, approximated by distance to the nearest coast.
+    if dist_to_grid_km is None it falls back to dist_to_port_km, preserving the
+    old single-distance behaviour for callers that pass only one distance.
     """
+    if dist_to_grid_km is None:
+        dist_to_grid_km = dist_to_port_km
+
     #reference a 500 mw farm to allocate shared infrastructure (substation, export cable)
     farm_capacity_mw = 500.0
     number_of_turbines = farm_capacity_mw / rated_power_mw
@@ -28,21 +40,21 @@ def estimate_capex(depth_m: float, rated_power_mw: float, distance_km: float = 0
     #3. array cables and offshore substation
     internal_grid_capex = 500_000 * rated_power_mw
 
-    #4. export transmission - hvdc required beyond 80 km
-    if distance_km <= 80:
+    #4. export transmission - export cable to shore; hvdc required beyond 80 km
+    if dist_to_grid_km <= 80:
         hvac_substation_cost = 50_000_000
-        hvac_cable_cost = distance_km * 1_200_000
+        hvac_cable_cost = dist_to_grid_km * 1_200_000
         total_transmission_cost = hvac_substation_cost + hvac_cable_cost
     else:
         hvdc_converter_stations = 250_000_000
-        hvdc_cable_cost = distance_km * 800_000
+        hvdc_cable_cost = dist_to_grid_km * 800_000
         total_transmission_cost = hvdc_converter_stations + hvdc_cable_cost
 
     #allocate shared transmission cost to one turbine in the 500 mw reference farm
     transmission_capex_per_turbine = total_transmission_cost / number_of_turbines
 
-    #5. installation and vessel day rates - small distance penalty for transit time
-    installation_capex = (400_000 * rated_power_mw) + (distance_km * 5_000)
+    #5. installation and vessel day rates - small port-transit penalty for transit time
+    installation_capex = (400_000 * rated_power_mw) + (dist_to_port_km * 5_000)
 
     return (turbine_capex +
             foundation_capex +
@@ -113,10 +125,17 @@ def run_economic_analysis(sites_with_aep: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         depth = row["depth_m"]
-        distance = row.get("dist_to_port_km", 0.0)
+        dist_port = row.get("dist_to_port_km", 0.0)
+        #export cable runs to the nearest grid-connection point (proxied by the
+        #coast), distinct from the o&m port transit distance (bug ledger #8).
+        #fall back to the port distance if shore distance is unavailable.
+        dist_grid = row.get("dist_to_shore_km", dist_port)
+        if pd.isna(dist_grid):
+            dist_grid = dist_port
         foundation_type = "floating" if depth > 60 else "fixed-bottom"
 
-        capex = estimate_capex(depth, TURBINE["rated_power_mw"], distance)
+        capex = estimate_capex(depth, TURBINE["rated_power_mw"],
+                               dist_to_port_km=dist_port, dist_to_grid_km=dist_grid)
         opex = capex * E["opex_pct_capex_per_year"]
 
         #aep fed to lcoe uses the post-loss capacity factor, applied exactly once.
@@ -183,14 +202,12 @@ def compute_lcoe_for_v2_farms(v2_farms_df, gebco_nc_path: str = None):
             lon_dim  = "lon" if "lon" in ds.coords else "longitude"
             lat_dim  = "lat" if "lat" in ds.coords else "latitude"
 
-            depths = []
-            for _, row in df.iterrows():
-                elev = float(ds[elev_var].sel(
-                    {lon_dim: row["lon"], lat_dim: row["lat"]},
-                    method="nearest"
-                ))
-                depths.append(abs(elev) if elev < 0 else 0.0)
-            df["depth_m"] = depths
+            #vectorised nearest-neighbour lookup (bug ledger #4): one xr.sel with
+            #array indexers instead of a per-row loop. identical result.
+            lons = xr.DataArray(df["lon"].values, dims="pts")
+            lats = xr.DataArray(df["lat"].values, dims="pts")
+            elev = ds[elev_var].sel({lon_dim: lons, lat_dim: lats}, method="nearest").values
+            df["depth_m"] = np.where(elev < 0, -elev, 0.0).astype(float)
             print(f"[Economics-V2] GEBCO depth extracted for {len(df)} farms. "
                   f"Range: {df['depth_m'].min():.0f}–{df['depth_m'].max():.0f} m")
         except Exception as e:
@@ -231,13 +248,15 @@ def compute_lcoe_for_v2_farms(v2_farms_df, gebco_nc_path: str = None):
         #per-turbine lcoe (comparable with candidate sites)
         n_turbines      = capacity / TURBINE["rated_power_mw"]
         aep_per_turbine = aep / n_turbines if n_turbines > 0 else 0.0
-        capex_turbine   = estimate_capex(depth, TURBINE["rated_power_mw"], distance_km=0.0)
+        capex_turbine   = estimate_capex(depth, TURBINE["rated_power_mw"],
+                                          dist_to_port_km=0.0, dist_to_grid_km=0.0)
         opex_turbine    = capex_turbine * E["opex_pct_capex_per_year"]
         lcoe_turbine    = (compute_lcoe(capex_turbine, aep_per_turbine, TURBINE["rated_power_mw"])
                            if aep_per_turbine > 0 else np.nan)
 
         #whole-farm lcoe (linear scale - no economies of scale captured)
-        capex_per_turbine = estimate_capex(depth, TURBINE["rated_power_mw"], distance_km=0.0)
+        capex_per_turbine = estimate_capex(depth, TURBINE["rated_power_mw"],
+                                            dist_to_port_km=0.0, dist_to_grid_km=0.0)
         capex_farm = capex_per_turbine * n_turbines
         opex_farm  = capex_farm * E["opex_pct_capex_per_year"]
         lcoe_farm  = compute_lcoe(capex_farm, aep, capacity) if aep > 0 else np.nan
