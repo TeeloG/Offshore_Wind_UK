@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="paper/ukowepipe_logo.svg" width="270" alt="logo">
+  <img src="logo/ukowepipe_logo.png" width="270" alt="UKOWEPipe logo">
 </p>
 
-<h1 align="center">United Kingdom Offshore Wind Pipeline</h1>
+<h1 align="center">UK Offshore Wind Pipeline</h1>
 
 <p align="center">
   An open, reproducible Python pipeline for siting, energy-yield, and cost
@@ -13,28 +13,42 @@
 
 ## What it does
 
-From open data, in a single run:
+Run `python main.py` and it works through five stages, writing maps, charts and
+figures into `outputs/`:
 
-1. **Map** UK waters on a grid.
-2. **Score & select** the best sites — wind, water depth, port distance, seabed.
-3. **Estimate energy** — capacity factor and annual yield from ERA5 reanalysis.
-4. **Estimate cost** — levelised cost of energy (LCOE) per site.
-5. **Flag low-wind risk** — multi-day "Dunkelflaute" events.
+1. Lay a grid over UK waters and attach wind speed, water depth, distance to the
+   nearest port, and seabed type to every cell.
+2. Drop the cells that cannot work (too shallow, too deep, inside a marine
+   protected area), score what is left, and pick the 15 best sites while keeping
+   them spread apart.
+3. Turn ERA5 reanalysis wind into an hourly capacity factor and an annual energy
+   figure for each site.
+4. Cost each site with a depth-aware LCOE model.
+5. Find the Dunkelflaute, the multi-day lulls when there is almost no wind, since
+   those are what make a wind-heavy grid nervous.
 
-Produces interactive maps and charts plus publication-ready figures.
+To check the wind numbers, each of the 44 operational UK farms is run through
+ERA5 with its own turbine and compared against its reported output.
 
-## Data (all open)
+## Data
 
-ERA5 (wind) · GEBCO (bathymetry) · JNCC (protected areas & EEZ) · BGS (seabed).
+Everything comes from open sources: ERA5 for wind, GEBCO for bathymetry, JNCC for
+protected areas and the EEZ boundary, and BGS for seabed sediment. Without the
+ERA5 file the pipeline falls back to a synthetic wind field, so it still runs
+offline.
 
-## Quickstart
+## Running it
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
+The knobs all live in `config.py`: study area, turbine, depth limits, scoring
+weights, and the economic assumptions.
+
 ## Status
 
-🚧 Work in progress, name is provisional. Results are being validated against
-44 operational UK offshore wind farms.
+Early days, and the name may change. Site selection and capacity factors now run
+on ERA5; the cost figures are still being checked against the operational fleet,
+so treat the LCOE numbers as indicative for now.
