@@ -119,14 +119,17 @@ def run_economic_analysis(sites_with_aep: pd.DataFrame) -> pd.DataFrame:
         capex = estimate_capex(depth, TURBINE["rated_power_mw"], distance)
         opex = capex * E["opex_pct_capex_per_year"]
 
-        #adjust aep to account for array, electrical, and downtime losses if available
-        aep_for_lcoe = row["aep_adjusted_mwh"]
-        if "calculated_cf" in row and "mean_cf" in row and pd.notna(row["calculated_cf"]) and pd.notna(row["mean_cf"]) and row["mean_cf"] > 0:
-            availability = TURBINE["availability"]
-            current_ratio = aep_for_lcoe / (TURBINE["rated_power_mw"] * 8760 * row["mean_cf"])
-            #if aep was only adjusted for availability, apply the additional loss factors
-            if abs(current_ratio - availability) < 0.01:
-                aep_for_lcoe = row["aep_adjusted_mwh"] * (row["calculated_cf"] / row["mean_cf"])
+        #aep fed to lcoe uses the post-loss capacity factor, applied exactly once.
+        #calculated_cf already folds in array, electrical, and downtime losses, so
+        #multiplying by availability (0.94) again would double-count the downtime
+        #derate. availability and the 5.97% downtime are the same physical effect,
+        #and applying both inflated every lcoe by ~6% (bug ledger #1). availability
+        #is dropped from this path and kept only for the reported net aep column.
+        if "calculated_cf" in row and pd.notna(row.get("calculated_cf")):
+            aep_for_lcoe = TURBINE["rated_power_mw"] * 8760 * row["calculated_cf"]
+        else:
+            #no post-loss cf available, fall back to the reported net aep figure.
+            aep_for_lcoe = row["aep_adjusted_mwh"]
 
         lcoe = compute_lcoe(capex, aep_for_lcoe, TURBINE["rated_power_mw"])
 
