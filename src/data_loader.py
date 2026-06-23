@@ -5,11 +5,71 @@ import os
 import numpy as np
 import pandas as pd
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import xarray as xr
+
+
+#wind resource provider seam
+#a small interface so the pipeline can swap the wind source (synthetic vs era5)
+#without touching downstream code. synthetic stays the default so the pipeline
+#runs offline/tokenless; era5 (phase 4) activates only when its .nc file exists.
+
+@runtime_checkable
+class WindResource(Protocol):
+    """
+    interface for a wind data source feeding site selection and energy yield.
+
+    implementations provide a spatial mean-wind field (for suitability scoring)
+    and an hourly capacity-factor series per point (for aep / dunkelflaute).
+    """
+
+    def get_grid(self, resolution: float = 0.5) -> pd.DataFrame:
+        """return a grid dataframe with at least lon, lat, mean_wind_ms columns."""
+        ...
+
+    def get_hourly_cf(self, lat: float, lon: float, year: int = 2019) -> pd.Series:
+        """return an hourly capacity-factor series (0-1) for one point."""
+        ...
+
+
+class SyntheticWind:
+    """
+    the default wind provider, combining the original synthetic field with the
+    renewables.ninja cache/synthetic capacity-factor path.
+
+    keeps the pipeline reproducible with no era5 download and no api token.
+    construction params carry the context the underlying helpers need so the
+    method signatures stay faithful to the WindResource protocol.
+
+    args:
+        eez_shapefile: optional path to the uk eez .shp for grid clipping.
+        ninja_token:   renewables.ninja api token ("" gives a synthetic cf series).
+        v2_farms_df:   optional v2 farms frame used to seed synthetic cf means.
+    """
+
+    def __init__(self, eez_shapefile: str = None,
+                 ninja_token: str = "",
+                 v2_farms_df=None):
+        self.eez_shapefile = eez_shapefile
+        self.ninja_token = ninja_token
+        self.v2_farms_df = v2_farms_df
+
+    def get_grid(self, resolution: float = 0.5) -> pd.DataFrame:
+        return make_placeholder_wind_grid(
+            resolution_deg=resolution,
+            eez_shapefile=self.eez_shapefile,
+        )
+
+    def get_hourly_cf(self, lat: float, lon: float, year: int = 2019) -> pd.Series:
+        return fetch_ninja_capacity_factors(
+            lat=lat, lon=lon,
+            token=self.ninja_token,
+            year=year,
+            v2_farms_df=self.v2_farms_df,
+        )
 
 
 #era5 wind reanalysis
