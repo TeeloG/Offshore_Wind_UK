@@ -487,6 +487,10 @@ def main(open_browser: bool = None) -> None:
     else:
         print("[Validation] Skipped (requires ERA5 wind provider and V2 farm data).")
 
+    #monte carlo uncertainty + sobol sensitivity on the candidate-site lcoe model
+    from src.uncertainty import run_uncertainty
+    run_uncertainty(sites_final_original)
+
     map1, map2 = run_visualisation(
         wind_grid, grid, sites_final, sites_final_original,
         v2_farms, site_combinations, paths["eez"]

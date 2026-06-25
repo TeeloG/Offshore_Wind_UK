@@ -116,6 +116,35 @@ ECONOMICS = {
     "discount_rate":                  0.07,   #7%
 }
 
+#monte carlo uncertainty quantification 
+#ranges feed src/uncertainty.py: per-site monte carlo LCOE distributions
+#(P10/P50/P90) and sobol sensitivity (salib). the central case matches the
+#deterministic baseline (discount-rate mode 7%, capex multipliers centred on 1.0).
+UQ = {
+    "n_samples":  10_000,             #plain monte carlo draws per site
+    "sobol_n":     1024,              #saltelli base sample for sobol indices
+    "seed":          42,
+    #discount rate: triangular (min, mode, max); mode matches ECONOMICS baseline
+    "discount_rate_tri": (0.05, 0.07, 0.10),
+    #per-component capex multiplier: +/- fraction (triangular about 1.0),
+    #differentiated by component maturity (loosely per bvg / industry ranges)
+    "capex_pct": {
+        "turbine":      0.15,
+        "foundation":   0.25,
+        "array":        0.20,
+        "transmission": 0.30,
+        "installation": 0.25,
+    },
+    #operational losses: normal (mean %, sd percentage-points), clipped >= 0
+    "array_loss":      (11.27, 1.5),
+    "electrical_loss":  (8.90, 1.5),
+    "downtime_loss":    (5.97, 1.5),
+    #inter-annual capacity-factor multiplier: normal (mean, sd).
+    #TODO: sd 0.05 is a literature stand-in (uk annual wind iav ~5-6%); replace
+    #with the measured inter-annual sd once multi-year era5 is available.
+    "cf_interannual":   (1.00, 0.05),
+}
+
 #renewables.ninja api
 #paste your personal api token below (replacing the placeholder).
 #get one free at https://www.renewables.ninja (account -> api).

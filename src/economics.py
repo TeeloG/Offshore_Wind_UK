@@ -33,7 +33,8 @@ def reference_farm_summary() -> dict:
 
 def estimate_capex(depth_m: float, rated_power_mw: float,
                    dist_to_port_km: float = 0.0,
-                   dist_to_grid_km: float = None) -> float:
+                   dist_to_grid_km: float = None,
+                   return_components: bool = False):
     """
     estimate capex (£) for a single turbine using industry-standard component
     breakdowns, stepped foundation thresholds, and hvac/hvdc transmission logic.
@@ -44,6 +45,10 @@ def estimate_capex(depth_m: float, rated_power_mw: float,
                          point, approximated by distance to the nearest coast.
     if dist_to_grid_km is None it falls back to dist_to_port_km, preserving the
     old single-distance behaviour for callers that pass only one distance.
+
+    if return_components is true, returns (total, components_dict) where the dict
+    has per-turbine turbine/foundation/array/transmission/installation costs, for
+    the monte carlo uncertainty module to perturb each component independently.
     """
     if dist_to_grid_km is None:
         dist_to_grid_km = dist_to_port_km
@@ -88,11 +93,23 @@ def estimate_capex(depth_m: float, rated_power_mw: float,
     #5. installation and vessel day rates - small port-transit penalty for transit time
     installation_capex = (400_000 * rated_power_mw) + (dist_to_port_km * 5_000)
 
-    return (turbine_capex +
-            foundation_capex +
-            internal_grid_capex +
-            transmission_capex_per_turbine +
-            installation_capex)
+    total = (turbine_capex +
+             foundation_capex +
+             internal_grid_capex +
+             transmission_capex_per_turbine +
+             installation_capex)
+
+    if return_components:
+        components = {
+            "turbine":      turbine_capex,
+            "foundation":   foundation_capex,
+            "array":        internal_grid_capex,
+            "transmission": transmission_capex_per_turbine,
+            "installation": installation_capex,
+        }
+        return total, components
+
+    return total
 
 
 def compute_lcoe(capex_gbp: float,
