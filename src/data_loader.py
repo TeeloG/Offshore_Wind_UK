@@ -97,6 +97,7 @@ class ERA5Wind:
         self.eez_shapefile = eez_shapefile
         self.power_curve = power_curve
         self._ds = None
+        self._mean_field = None   #cached (lons, lats, mean_ws) annual-mean field
 
     def _open(self):
         if self._ds is None:
@@ -112,12 +113,68 @@ class ERA5Wind:
              else ("time" if "time" in ds.coords else None))
         return lon, lat, t
 
+    def _cache_key(self) -> str:
+        """identity of the source file (path, size, mtime) for the mean-field cache."""
+        st = os.stat(self.nc_path)
+        return f"{os.path.abspath(self.nc_path)}|{st.st_size}|{int(st.st_mtime)}"
+
+    def _mean_cache_path(self) -> str:
+        import hashlib
+        h = hashlib.md5(self._cache_key().encode()).hexdigest()[:12]
+        base = os.path.splitext(os.path.basename(self.nc_path))[0]
+        return os.path.join("outputs", "data", f"era5_meanws_{base}_{h}.npz")
+
+    def _annual_mean_field(self):
+        """
+        annual-mean ws100 over the full era5 grid, cached to disk so a normal run
+        does not rescan the 217 mb source file. returns (lons, lats, mean_ws),
+        with mean_ws shaped (lat, lon).
+
+        the cache is keyed on the source file (path, size, mtime); a missing or
+        stale cache is recomputed from the file and rewritten. sampling this mean
+        field at the nearest cell is identical to averaging that cell's hourly
+        ws100 over the year, so site selection is unchanged.
+        """
+        if self._mean_field is not None:
+            return self._mean_field
+
+        cache = self._mean_cache_path()
+        key = self._cache_key()
+        if os.path.exists(cache):
+            try:
+                d = np.load(cache, allow_pickle=False)
+                if str(d["key"]) == key:
+                    self._mean_field = (d["lons"], d["lats"], d["mean_ws"])
+                    print(f"[ERA5] Loaded cached annual-mean wind field from {cache}.")
+                    return self._mean_field
+                print("[ERA5] Mean-field cache is stale (source changed), recomputing.")
+            except Exception as e:
+                print(f"[ERA5] WARNING: ignoring unreadable mean-field cache ({e}).")
+
+        #cache miss: compute the annual mean once from the full file
+        ds = self._open()
+        lon_name, lat_name, _ = self._names(ds)
+        lons = ds[lon_name].values
+        lats = ds[lat_name].values
+        ws = np.sqrt(ds["u100"].values**2 + ds["v100"].values**2)
+        mean_ws = ws.mean(axis=0)   #(lat, lon)
+
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            np.savez(cache, key=np.array(key), lons=lons, lats=lats, mean_ws=mean_ws)
+            print(f"[ERA5] Computed and cached annual-mean wind field -> {cache}.")
+        except Exception as e:
+            print(f"[ERA5] WARNING: could not write mean-field cache ({e}).")
+
+        self._mean_field = (lons, lats, mean_ws)
+        return self._mean_field
+
     def get_grid(self, resolution: float = 0.5) -> pd.DataFrame:
         import xarray as xr
         from config import UK_BBOX
 
-        ds = self._open()
-        lon_name, lat_name, _ = self._names(ds)
+        lons_src, lats_src, mean_ws = self._annual_mean_field()
+        lon_name, lat_name, _ = self._names(self._open())
 
         #same lon/lat grid the synthetic provider builds, so depth/port/seabed
         #enrichment and exclusions are identical and only the wind values change.
@@ -127,23 +184,24 @@ class ERA5Wind:
         flat_lon = lon_grid.ravel()
         flat_lat = lat_grid.ravel()
 
-        #vectorised nearest-neighbour sample of the era5 cells under each point,
-        #then annual mean of ws100 = sqrt(u^2 + v^2).
+        #nearest-neighbour sample of the cached annual-mean field. identical to
+        #averaging the nearest era5 cell's hourly ws100 over the year.
+        mean_da = xr.DataArray(
+            mean_ws, dims=(lat_name, lon_name),
+            coords={lat_name: lats_src, lon_name: lons_src},
+        )
         xlon = xr.DataArray(flat_lon, dims="pts")
         xlat = xr.DataArray(flat_lat, dims="pts")
-        u = ds["u100"].sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
-        v = ds["v100"].sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
-        ws = np.sqrt(u**2 + v**2)
-        mean_ws = ws.mean(axis=0)
+        sampled = mean_da.sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
 
         df = pd.DataFrame({
             "lon": flat_lon,
             "lat": flat_lat,
-            "mean_wind_ms":       np.round(mean_ws, 2),
-            "wind_power_density": np.round(0.5 * 1.225 * mean_ws**3, 1),
+            "mean_wind_ms":       np.round(sampled, 2),
+            "wind_power_density": np.round(0.5 * 1.225 * sampled**3, 1),
         })
         print(f"[ERA5] Sampled ERA5 100 m annual-mean wind to {len(df)} grid points. "
-              f"Mean {mean_ws.mean():.1f} m/s, range {mean_ws.min():.1f}-{mean_ws.max():.1f} m/s.")
+              f"Mean {sampled.mean():.1f} m/s, range {sampled.min():.1f}-{sampled.max():.1f} m/s.")
 
         df = self._clip_to_eez(df)
         return df
