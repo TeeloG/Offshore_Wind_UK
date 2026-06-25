@@ -79,6 +79,34 @@ SCORE_ANCHORS = {
     "port_max_km":  200.0,    #port distance at or above this scores 0 (0 km scores 1)
 }
 
+#reference wind farm (for shared-infrastructure amortisation and footprint)
+#candidate-site economics assume a standardised square array of identical
+#turbines. shared transmission (offshore substation / hvdc converter + export
+#cable) is amortised across the whole array. array/wake losses stay empirical
+#(the loss chain); no wake model is applied here (block 2 phase 2).
+#default: 10 x 10 x 15 mw = 1500 mw, replacing the old 500 mw (~33-turbine) ref.
+REFERENCE_FARM = {
+    "layout_side":         10,    #turbines per side; layout_side^2 turbines total
+    "spacing_rotor_diam":   7.0,  #spacing between turbines in rotor diameters
+}
+
+#offshore transmission cost assumptions (block 2 phase 2)
+#the offshore substation / hvdc converter scale with farm capacity (£/mw) rather
+#than a fixed lump, so a larger array is not understated when the shared cost is
+#amortised per turbine. the export cable scales with the export-cable length
+#(£/km). figures are midpoints of typical ranges in offshore wind cost reviews
+#(bvg associates, guide to an offshore wind farm, 2019; ore catapult): hvac
+#offshore substation ~£0.1-0.15M/mw, hvdc converter pair ~£0.2-0.4M/mw. these
+#assume a roughly linear £/mw scaling; mild economies of scale with capacity
+#could refine them later.
+TRANSMISSION = {
+    "hvdc_threshold_km":            80,        #export distance above which hvdc is used
+    "hvac_substation_gbp_per_mw":   120_000,   #£0.12M/mw offshore ac substation
+    "hvac_cable_gbp_per_km":      1_200_000,   #ac export cable
+    "hvdc_converter_gbp_per_mw":    300_000,   #£0.30M/mw hvdc converter pair
+    "hvdc_cable_gbp_per_km":        800_000,   #dc export cable
+}
+
 #economic assumptions
 ECONOMICS = {
     "capex_per_mw_fixed_gbp":    3_000_000,   #£3m/mw (higgins & foley baseline)

@@ -5,6 +5,32 @@ import numpy as np
 import pandas as pd
 
 
+def reference_farm_summary() -> dict:
+    """
+    geometry of the standardised reference array used for cost amortisation.
+
+    a square layout_side x layout_side array of identical turbines, spaced a
+    given number of rotor diameters apart. footprint side = layout_side x
+    spacing; shared transmission is amortised across all turbines.
+
+    returns a dict with n_turbines, capacity_mw, spacing_m, footprint_side_km,
+    footprint_km2.
+    """
+    from config import REFERENCE_FARM, TURBINE
+
+    side = REFERENCE_FARM["layout_side"]
+    n = side ** 2
+    spacing_m = REFERENCE_FARM["spacing_rotor_diam"] * TURBINE["rotor_diameter_m"]
+    footprint_side_km = side * spacing_m / 1000.0
+    return {
+        "n_turbines":        n,
+        "capacity_mw":       n * TURBINE["rated_power_mw"],
+        "spacing_m":         spacing_m,
+        "footprint_side_km": footprint_side_km,
+        "footprint_km2":     footprint_side_km ** 2,
+    }
+
+
 def estimate_capex(depth_m: float, rated_power_mw: float,
                    dist_to_port_km: float = 0.0,
                    dist_to_grid_km: float = None) -> float:
@@ -22,9 +48,12 @@ def estimate_capex(depth_m: float, rated_power_mw: float,
     if dist_to_grid_km is None:
         dist_to_grid_km = dist_to_port_km
 
-    #reference a 500 mw farm to allocate shared infrastructure (substation, export cable)
-    farm_capacity_mw = 500.0
-    number_of_turbines = farm_capacity_mw / rated_power_mw
+    #standardised reference array: shared transmission (substation/converter +
+    #export cable) is amortised across the whole farm (block 2 phase 2).
+    #default 10 x 10 x 15 mw = 1500 mw, replacing the old 500 mw (~33-turbine) ref.
+    from config import REFERENCE_FARM
+    number_of_turbines = REFERENCE_FARM["layout_side"] ** 2
+    farm_capacity_mw = number_of_turbines * rated_power_mw
 
     #1. turbine cost (nacelle, rotor, tower) - roughly £1.2m/mw
     turbine_capex = 1_200_000 * rated_power_mw
@@ -40,17 +69,20 @@ def estimate_capex(depth_m: float, rated_power_mw: float,
     #3. array cables and offshore substation
     internal_grid_capex = 500_000 * rated_power_mw
 
-    #4. export transmission - export cable to shore; hvdc required beyond 80 km
-    if dist_to_grid_km <= 80:
-        hvac_substation_cost = 50_000_000
-        hvac_cable_cost = dist_to_grid_km * 1_200_000
-        total_transmission_cost = hvac_substation_cost + hvac_cable_cost
+    #4. export transmission - export cable to shore; hvdc required beyond threshold.
+    #   the substation/converter scales with farm capacity (£/mw) so the bigger
+    #   array is not understated; the export cable scales with its length (£/km).
+    from config import TRANSMISSION as T
+    if dist_to_grid_km <= T["hvdc_threshold_km"]:
+        substation_cost = T["hvac_substation_gbp_per_mw"] * farm_capacity_mw
+        cable_cost = dist_to_grid_km * T["hvac_cable_gbp_per_km"]
+        total_transmission_cost = substation_cost + cable_cost
     else:
-        hvdc_converter_stations = 250_000_000
-        hvdc_cable_cost = dist_to_grid_km * 800_000
-        total_transmission_cost = hvdc_converter_stations + hvdc_cable_cost
+        converter_cost = T["hvdc_converter_gbp_per_mw"] * farm_capacity_mw
+        cable_cost = dist_to_grid_km * T["hvdc_cable_gbp_per_km"]
+        total_transmission_cost = converter_cost + cable_cost
 
-    #allocate shared transmission cost to one turbine in the 500 mw reference farm
+    #allocate the shared transmission cost to one turbine in the reference array
     transmission_capex_per_turbine = total_transmission_cost / number_of_turbines
 
     #5. installation and vessel day rates - small port-transit penalty for transit time
@@ -108,6 +140,12 @@ def run_economic_analysis(sites_with_aep: pd.DataFrame) -> pd.DataFrame:
     returns the same dataframe with capex, opex, and lcoe columns added.
     """
     from config import TURBINE, ECONOMICS as E
+
+    farm = reference_farm_summary()
+    print(f"[Economics] Reference array: {farm['n_turbines']} x {TURBINE['rated_power_mw']} MW "
+          f"= {farm['capacity_mw']:.0f} MW, spacing {farm['spacing_m']:.0f} m, "
+          f"footprint {farm['footprint_side_km']:.1f} x {farm['footprint_side_km']:.1f} km "
+          f"({farm['footprint_km2']:.0f} km2).")
 
     df = sites_with_aep.copy()
 
