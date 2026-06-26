@@ -194,14 +194,23 @@ class ERA5Wind:
         xlat = xr.DataArray(flat_lat, dims="pts")
         sampled = mean_da.sel({lon_name: xlon, lat_name: xlat}, method="nearest").values
 
+        #lift the suitability field to hub height too, so site selection uses the
+        #same wind altitude as the energy/cost path and the 7-11 m/s anchors are
+        #strictly hub-height. shear is ~uniform, so the ranking barely changes.
+        from src.energy import extrapolate_wind_shear
+        from config import TURBINE, WIND_SHEAR
+        sampled = extrapolate_wind_shear(sampled, WIND_SHEAR["reference_height_m"],
+                                         TURBINE["hub_height_m"], WIND_SHEAR["alpha"])
+
         df = pd.DataFrame({
             "lon": flat_lon,
             "lat": flat_lat,
             "mean_wind_ms":       np.round(sampled, 2),
             "wind_power_density": np.round(0.5 * 1.225 * sampled**3, 1),
         })
-        print(f"[ERA5] Sampled ERA5 100 m annual-mean wind to {len(df)} grid points. "
-              f"Mean {sampled.mean():.1f} m/s, range {sampled.min():.1f}-{sampled.max():.1f} m/s.")
+        print(f"[ERA5] Sampled ERA5 100 m wind, extrapolated to {TURBINE['hub_height_m']:.0f} m hub, "
+              f"to {len(df)} grid points. Mean {sampled.mean():.1f} m/s, "
+              f"range {sampled.min():.1f}-{sampled.max():.1f} m/s.")
 
         df = self._clip_to_eez(df)
         return df
@@ -241,10 +250,18 @@ class ERA5Wind:
         return pd.Series(ws, index=idx, name="ws100")
 
     def get_hourly_cf(self, lat: float, lon: float, year: int = 2019) -> pd.Series:
-        from src.energy import capacity_factor_from_wind
+        from src.energy import capacity_factor_from_wind, extrapolate_wind_shear
+        from config import TURBINE, WIND_SHEAR
 
+        #era5 wind is at the reference height (100 m); lift it to the turbine hub
+        #height with a power-law shear before applying the power curve, since the
+        #rotor sees the hub-height resource.
         ws = self.get_hourly_wind(lat, lon)
-        cf = capacity_factor_from_wind(ws.values, self.power_curve)
+        ws_hub = extrapolate_wind_shear(ws.values,
+                                        WIND_SHEAR["reference_height_m"],
+                                        TURBINE["hub_height_m"],
+                                        WIND_SHEAR["alpha"])
+        cf = capacity_factor_from_wind(ws_hub, self.power_curve)
         return pd.Series(cf, index=ws.index, name="electricity")
 
 

@@ -28,7 +28,7 @@ REGIONS_OF_INTEREST = {
 #turbine assumptions
 TURBINE = {
     "rated_power_mw":   15,
-    "hub_height_m":    120,
+    "hub_height_m":    150,       #iea 15 mw reference hub height (era5 wind is shear-extrapolated up to this)
     "rotor_diameter_m": 236,     #vestas v236-15.0
     "availability":     0.94,    #operational availability (crabtree et al. 2015)
 }
@@ -166,6 +166,16 @@ NINJA_API = {
 ERA5 = {
     "nc_path": "data/raw/era5/era5_uk_100m_2019.nc",
     "year":     2019,
+}
+
+#wind shear for hub-height extrapolation
+#era5 provides wind at 100 m; the iea 15 mw hub is at 150 m (TURBINE). before the
+#power curve is applied, the 100 m wind is extrapolated up to hub height with a
+#power law, v(z) = v(zref) * (z/zref)**alpha. alpha 0.11 is a typical neutral
+#offshore exponent. both knobs are tunable here.
+WIND_SHEAR = {
+    "reference_height_m": 100.0,   #era5 wind level (u100/v100)
+    "alpha":                0.11,  #power-law shear exponent (offshore)
 }
 
 #turbine power curve for era5-native capacity factors (bug ledger #2)

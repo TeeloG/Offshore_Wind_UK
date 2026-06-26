@@ -32,6 +32,27 @@ def estimate_cf_from_wind_speed(mean_wind_ms: float,
         return cf_at_15 + (mean_wind_ms - 15.0) * 0.008
 
 
+def extrapolate_wind_shear(ws, from_height_m: float, to_height_m: float,
+                           alpha: float):
+    """
+    extrapolate wind speed from one height to another with a power-law shear.
+
+    v(z) = v(z_ref) * (z / z_ref) ** alpha. used to lift era5 100 m wind to the
+    turbine hub height before the power curve is applied, since the resource at
+    hub height is what the rotor actually sees.
+
+    args:
+        ws:            wind speed(s) at from_height_m (scalar or array).
+        from_height_m: reference height of ws (m), e.g. era5 100 m.
+        to_height_m:   target hub height (m).
+        alpha:         power-law shear exponent (offshore ~0.11).
+
+    returns:
+        wind speed(s) at to_height_m, same shape as ws.
+    """
+    return np.asarray(ws, dtype=float) * (to_height_m / from_height_m) ** alpha
+
+
 def capacity_factor_from_wind(ws, power_curve: dict = None):
     """
     convert hub-height wind speed (m/s) to capacity factor (0-1) via a turbine
